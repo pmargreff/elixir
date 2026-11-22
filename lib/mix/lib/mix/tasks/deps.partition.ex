@@ -118,8 +118,29 @@ defmodule Mix.Tasks.Deps.Partition do
         end
       end)
 
+    deps = prioritize(deps)
     status = Map.new(deps, &{&1.app, :pending})
     send_deps_and_server_loop(clients, [], deps, status)
+  end
+
+  # Sort dependencies by their longest chain of dependents, so partitions
+  # start long chains first. Ties go to the one with more direct dependents,
+  # then keep the topological order.
+  def prioritize(deps) do
+    # Children come before their dependents, so we traverse in reverse
+    lengths =
+      List.foldr(deps, %{}, fn %{app: app, deps: children}, lengths ->
+        length = Map.get(lengths, app, 0) + 1
+
+        Enum.reduce(children, Map.put(lengths, app, length), fn %{app: child}, lengths ->
+          Map.update(lengths, child, length, &max(&1, length))
+        end)
+      end)
+
+    dependents =
+      Enum.frequencies(for %{deps: children} <- deps, %{app: child} <- children, do: child)
+
+    Enum.sort_by(deps, &{Map.fetch!(lengths, &1.app), Map.get(dependents, &1.app, 0)}, :desc)
   end
 
   defp send_deps_and_server_loop(available, busy, deps, status) do
